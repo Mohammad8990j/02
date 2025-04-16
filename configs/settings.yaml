@@ -1,0 +1,17 @@
+
+language: fa
+symbol: XAUUSD_o
+timeframe: M15
+sl: 20
+tp: 40
+lot_size: 0.1
+strategy: cnn
+dark_mode: true
+trading:
+  symbol: "XAUUSD_o"
+  timeframe: "M5"
+  bars: 500
+account:
+ login: 90348413
+ password: "dZ6L57FZ83S$"
+ server: "LiteFinance-MT5-Demo"

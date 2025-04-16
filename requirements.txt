@@ -1,0 +1,12 @@
+
+pandas
+numpy
+matplotlib
+plotly
+PyYAML
+MetaTrader5
+PyQt5
+torch
+stable-baselines3
+gym
+pytest
