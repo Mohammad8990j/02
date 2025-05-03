@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Platform</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ErrorBoundary Component
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+
+      componentDidCatch(error, errorInfo) {
+        console.error("Error caught in ErrorBoundary:", error, errorInfo);
+      }
+
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="bg-red-600 text-white p-4 rounded-lg shadow-lg m-4">
+              <h2 className="text-lg font-bold">خطایی رخ داده است</h2>
+              <p>{this.state.error?.message || "لطفاً صفحه را رفرش کنید یا با پشتیبانی تماس بگیرید."}</p>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // WebSocket Utility
+    const connectWebSocket = (symbol, timeframe, onDataReceived) => {
+      const ws = new WebSocket(`ws://localhost:8000/ws/${symbol}/${timeframe}`);
+      
+      ws.onopen = () => {
+        console.log(`WebSocket connected for ${symbol} ${timeframe}`);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          onDataReceived(data);
+        } catch (error) {
+          console.error("Error parsing WebSocket data:", error);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error("WebSocket error:", error);
+      };
+
+      ws.onclose = () => {
+        console.log("WebSocket closed, attempting to reconnect...");
+        setTimeout(() => connectWebSocket(symbol, timeframe, onDataReceived), 5000);
+      };
+
+      return ws;
+    };
+
+    // Main App Component
+    const App = () => {
+      const [symbol, setSymbol] = useState("EURUSD_o");
+      const [timeframe, setTimeframe] = useState("M5");
+      const [signal, setSignal] = useState(null);
+      const [signalHistory, setSignalHistory] = useState([]);
+      const [ohlcData, setOhlcData] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [chartError, setChartError] = useState(null);
+      const [showSma, setShowSma] = useState(true);
+      const [showBollinger, setShowBollinger] = useState(true);
+      const [showRsi, setShowRsi] = useState(true);
+      const [showMacd, setShowMacd] = useState(true);
+      const [showStochastic, setShowStochastic] = useState(true);
+      const [showMfi, setShowMfi] = useState(true);
+      const [showPivot, setShowPivot] = useState(true);
+      const [showVolumeMa, setShowVolumeMa] = useState(true);
+      const [smaFastPeriod, setSmaFastPeriod] = useState(10);
+      const [smaSlowPeriod, setSmaSlowPeriod] = useState(20);
+      const [bbPeriod, setBbPeriod] = useState(20);
+      const [bbDeviation, setBbDeviation] = useState(2.0);
+      const [rsiPeriod, setRsiPeriod] = useState(14);
+      const [macdFastPeriod, setMacdFastPeriod] = useState(12);
+      const [macdSlowPeriod, setMacdSlowPeriod] = useState(26);
+      const [macdSignalPeriod, setMacdSignalPeriod] = useState(9);
+      const [stochFastkPeriod, setStochFastkPeriod] = useState(14);
+      const [stochSlowkPeriod, setStochSlowkPeriod] = useState(3);
+      const [stochSlowdPeriod, setStochSlowdPeriod] = useState(3);
+      const [mfiPeriod, setMfiPeriod] = useState(14);
+      const [volumeMaPeriod, setVolumeMaPeriod] = useState(20);
+      const [filterSymbol, setFilterSymbol] = useState("");
+      const [filterTimeframe, setFilterTimeframe] = useState("");
+      const [filterSignalType, setFilterSignalType] = useState("");
+      const [filterIndicator, setFilterIndicator] = useState("");
+      const priceChartRef = useRef(null);
+      const rsiChartRef = useRef(null);
+      const macdChartRef = useRef(null);
+      const stochasticChartRef = useRef(null);
+      const mfiChartRef = useRef(null);
+      const volumeChartRef = useRef(null);
+      const priceCanvasRef = useRef(null);
+      const rsiCanvasRef = useRef(null);
+      const macdCanvasRef = useRef(null);
+      const stochasticCanvasRef = useRef(null);
+      const mfiCanvasRef = useRef(null);
+      const volumeCanvasRef = useRef(null);
+
+      // Register Chart.js and annotation plugin
+      const { Chart } = window;
+      useEffect(() => {
+        if (Chart && window.ChartJSAnnotation) {
+          Chart.register(window.ChartJSAnnotation);
+          console.log("Chart.js annotation plugin registered successfully");
+        } else {
+          console.error("Failed to register Chart.js annotation plugin");
+          setChartError("Failed to initialize charting library");
+        }
+      }, []);
+
+      // WebSocket Connection
+      useEffect(() => {
+        const ws = connectWebSocket(symbol, timeframe, (data) => {
+          if (data.type === "signal") {
+            setSignal(data.payload);
+            setSignalHistory((prev) => [data.payload, ...prev.slice(0, 9)]);
+          } else if (data.type === "ohlc") {
+            setOhlcData((prev) => {
+              const newData = [...prev, data.payload];
+              return newData.slice(-100); // Keep last 100 records
+            });
+          } else if (data.type === "error") {
+            setChartError(data.message);
+          }
+        });
+
+        return () => ws.close();
+      }, [symbol, timeframe]);
+
+      // Fetch initial OHLC data
+      const fetchOhlcData = async () => {
+        try {
+          setLoading(true);
+          console.log(`Fetching OHLC data for ${symbol} on ${timeframe}`);
+          const response = await axios.get(`http://localhost:8000/ohlc/${symbol}/${timeframe}`, {
+            params: {
+              sma_fast_period: smaFastPeriod,
+              sma_slow_period: smaSlowPeriod,
+              bb_period: bbPeriod,
+              bb_deviation: bbDeviation,
+              rsi_period: rsiPeriod,
+              macd_fast_period: macdFastPeriod,
+              macd_slow_period: macdSlowPeriod,
+              macd_signal_period: macdSignalPeriod,
+              stoch_fastk_period: stochFastkPeriod,
+              stoch_slowk_period: stochSlowkPeriod,
+              stoch_slowd_period: stochSlowdPeriod,
+              mfi_period: mfiPeriod,
+              volume_ma_period: volumeMaPeriod
+            }
+          });
+          const data = response.data;
+
+          // Validate and filter data
+          const validData = [];
+          const invalidReasons = [];
+          data.forEach((d, index) => {
+            if (!d.time || typeof d.time !== "string") {
+              invalidReasons.push(`Record ${index}: Invalid time (${d.time})`);
+              return;
+            }
+            if (d.close === undefined || d.close === null || isNaN(d.close)) {
+              invalidReasons.push(`Record ${index}: Invalid close (${d.close})`);
+              return;
+            }
+            validData.push(d);
+          });
+
+          if (validData.length === 0) {
+            setChartError(`No valid data for chart: ${invalidReasons.join(", ") || "Unknown"}`);
+          } else {
+            setChartError(null);
+            setOhlcData(validData);
+          }
+        } catch (error) {
+          console.error("Error fetching OHLC data:", error);
+          setChartError(`Failed to fetch OHLC data: ${error.message}`);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Fetch initial signal
+      const fetchSignal = async () => {
+        try {
+          setLoading(true);
+          console.log(`Fetching signal for ${symbol} on ${timeframe}`);
+          const response = await axios.get(`http://localhost:8000/signal/${symbol}/${timeframe}`);
+          setSignal(response.data);
+          setSignalHistory((prev) => [response.data, ...prev.slice(0, 9)]);
+        } catch (error) {
+          console.error("Error fetching signal:", error);
+          setChartError(`Failed to fetch signal: ${error.message}`);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Initialize data on mount or when parameters change
+      useEffect(() => {
+        fetchOhlcData();
+        fetchSignal();
+      }, [
+        symbol, timeframe, smaFastPeriod, smaSlowPeriod, bbPeriod, bbDeviation,
+        rsiPeriod, macdFastPeriod, macdSlowPeriod, macdSignalPeriod,
+        stochFastkPeriod, stochSlowkPeriod, stochSlowdPeriod, mfiPeriod, volumeMaPeriod
+      ]);
+
+      // Price Chart
+      useEffect(() => {
+        if (!priceCanvasRef.current) return;
+
+        if (priceChartRef.current) {
+          priceChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0) {
+          try {
+            const datasets = [
+              {
+                label: "Close Price",
+                data: ohlcData.map((d) => d.close),
+                borderColor: "rgba(75, 192, 192, 1)",
+                fill: false,
+                tension: 0.1,
+              },
+            ];
+
+            if (showSma) {
+              datasets.push(
+                {
+                  label: `SMA (${smaFastPeriod})`,
+                  data: ohlcData.map((d) => d.sma_fast),
+                  borderColor: "rgba(255, 99, 132, 1)",
+                  fill: false,
+                  tension: 0.1,
+                },
+                {
+                  label: `SMA (${smaSlowPeriod})`,
+                  data: ohlcData.map((d) => d.sma_slow),
+                  borderColor: "rgba(54, 162, 235, 1)",
+                  fill: false,
+                  tension: 0.1,
+                }
+              );
+            }
+
+            if (showBollinger) {
+              datasets.push(
+                {
+                  label: `Bollinger Upper (${bbPeriod})`,
+                  data: ohlcData.map((d) => d.bb_upper),
+                  borderColor: "rgba(255, 206, 86, 1)",
+                  fill: false,
+                  tension: 0.1,
+                },
+                {
+                  label: `Bollinger Middle (${bbPeriod})`,
+                  data: ohlcData.map((d) => d.bb_middle),
+                  borderColor: "rgba(153, 102, 255, 1)",
+                  fill: false,
+                  tension: 0.1,
+                },
+                {
+                  label: `Bollinger Lower (${bbPeriod})`,
+                  data: ohlcData.map((d) => d.bb_lower),
+                  borderColor: "rgba(255, 159, 64, 1)",
+                  fill: false,
+                  tension: 0.1,
+                }
+              );
+            }
+
+            if (showPivot) {
+              datasets.push(
+                {
+                  label: "Pivot",
+                  data: ohlcData.map((d) => d.pivot),
+                  borderColor: "rgba(0, 255, 0, 1)",
+                  fill: false,
+                  tension: 0.1,
+                  borderDash: [5, 5],
+                },
+                {
+                  label: "Support 1",
+                  data: ohlcData.map((d) => d.support1),
+                  borderColor: "rgba(255, 0, 0, 1)",
+                  fill: false,
+                  tension: 0.1,
+                  borderDash: [5, 5],
+                },
+                {
+                  label: "Resistance 1",
+                  data: ohlcData.map((d) => d.resistance1),
+                  borderColor: "rgba(0, 0, 255, 1)",
+                  fill: false,
+                  tension: 0.1,
+                  borderDash: [5, 5],
+                }
+              );
+            }
+
+            priceChartRef.current = new Chart(priceCanvasRef.current, {
+              type: "line",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets,
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: { display: true, title: { display: true, text: "Price" } },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render price chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (priceChartRef.current) {
+            priceChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showSma, showBollinger, showPivot, smaFastPeriod, smaSlowPeriod, bbPeriod]);
+
+      // RSI Chart
+      useEffect(() => {
+        if (!rsiCanvasRef.current) return;
+
+        if (rsiChartRef.current) {
+          rsiChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0 && showRsi) {
+          try {
+            rsiChartRef.current = new Chart(rsiCanvasRef.current, {
+              type: "line",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets: [
+                  {
+                    label: `RSI (${rsiPeriod})`,
+                    data: ohlcData.map((d) => d.rsi),
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: {
+                    display: true,
+                    title: { display: true, text: "RSI" },
+                    min: 0,
+                    max: 100,
+                    ticks: { stepSize: 20 },
+                  },
+                },
+                plugins: {
+                  annotation: {
+                    annotations: {
+                      overbought: {
+                        type: "line",
+                        yMin: 70,
+                        yMax: 70,
+                        borderColor: "rgba(255, 99, 132, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Overbought (70)", enabled: true, position: "start" },
+                      },
+                      oversold: {
+                        type: "line",
+                        yMin: 30,
+                        yMax: 30,
+                        borderColor: "rgba(75, 192, 192, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Oversold (30)", enabled: true, position: "start" },
+                      },
+                    },
+                  },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render RSI chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (rsiChartRef.current) {
+            rsiChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showRsi, rsiPeriod]);
+
+      // MACD Chart
+      useEffect(() => {
+        if (!macdCanvasRef.current) return;
+
+        if (macdChartRef.current) {
+          macdChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0 && showMacd) {
+          try {
+            macdChartRef.current = new Chart(macdCanvasRef.current, {
+              type: "line",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets: [
+                  {
+                    label: `MACD (${macdFastPeriod},${macdSlowPeriod},${macdSignalPeriod})`,
+                    data: ohlcData.map((d) => d.macd),
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                  {
+                    label: `MACD Signal`,
+                    data: ohlcData.map((d) => d.macd_signal),
+                    borderColor: "rgba(54, 162, 235, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                  {
+                    label: `MACD Histogram`,
+                    type: "bar",
+                    data: ohlcData.map((d) => d.macd_hist),
+                    backgroundColor: ohlcData.map((d) => (d.macd_hist >= 0 ? "rgba(75, 192, 192, 0.5)" : "rgba(255, 99, 132, 0.5)")),
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: { display: true, title: { display: true, text: "MACD" } },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render MACD chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (macdChartRef.current) {
+            macdChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showMacd, macdFastPeriod, macdSlowPeriod, macdSignalPeriod]);
+
+      // Stochastic Chart
+      useEffect(() => {
+        if (!stochasticCanvasRef.current) return;
+
+        if (stochasticChartRef.current) {
+          stochasticChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0 && showStochastic) {
+          try {
+            stochasticChartRef.current = new Chart(stochasticCanvasRef.current, {
+              type: "line",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets: [
+                  {
+                    label: `Stochastic %K (${stochFastkPeriod},${stochSlowkPeriod},${stochSlowdPeriod})`,
+                    data: ohlcData.map((d) => d.stoch_k),
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                  {
+                    label: `Stochastic %D`,
+                    data: ohlcData.map((d) => d.stoch_d),
+                    borderColor: "rgba(54, 162, 235, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: {
+                    display: true,
+                    title: { display: true, text: "Stochastic" },
+                    min: 0,
+                    max: 100,
+                    ticks: { stepSize: 20 },
+                  },
+                },
+                plugins: {
+                  annotation: {
+                    annotations: {
+                      overbought: {
+                        type: "line",
+                        yMin: 80,
+                        yMax: 80,
+                        borderColor: "rgba(255, 99, 132, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Overbought (80)", enabled: true, position: "start" },
+                      },
+                      oversold: {
+                        type: "line",
+                        yMin: 20,
+                        yMax: 20,
+                        borderColor: "rgba(75, 192, 192, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Oversold (20)", enabled: true, position: "start" },
+                      },
+                    },
+                  },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render Stochastic chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (stochasticChartRef.current) {
+            stochasticChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showStochastic, stochFastkPeriod, stochSlowkPeriod, stochSlowdPeriod]);
+
+      // MFI Chart
+      useEffect(() => {
+        if (!mfiCanvasRef.current) return;
+
+        if (mfiChartRef.current) {
+          mfiChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0 && showMfi) {
+          try {
+            mfiChartRef.current = new Chart(mfiCanvasRef.current, {
+              type: "line",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets: [
+                  {
+                    label: `MFI (${mfiPeriod})`,
+                    data: ohlcData.map((d) => d.mfi),
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: {
+                    display: true,
+                    title: { display: true, text: "MFI" },
+                    min: 0,
+                    max: 100,
+                    ticks: { stepSize: 20 },
+                  },
+                },
+                plugins: {
+                  annotation: {
+                    annotations: {
+                      overbought: {
+                        type: "line",
+                        yMin: 80,
+                        yMax: 80,
+                        borderColor: "rgba(255, 99, 132, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Overbought (80)", enabled: true, position: "start" },
+                      },
+                      oversold: {
+                        type: "line",
+                        yMin: 20,
+                        yMax: 20,
+                        borderColor: "rgba(75, 192, 192, 0.5)",
+                        borderWidth: 1,
+                        label: { content: "Oversold (20)", enabled: true, position: "start" },
+                      },
+                    },
+                  },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render MFI chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (mfiChartRef.current) {
+            mfiChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showMfi, mfiPeriod]);
+
+      // Volume Chart
+      useEffect(() => {
+        if (!volumeCanvasRef.current) return;
+
+        if (volumeChartRef.current) {
+          volumeChartRef.current.destroy();
+        }
+
+        if (ohlcData.length > 0 && showVolumeMa) {
+          try {
+            volumeChartRef.current = new Chart(volumeCanvasRef.current, {
+              type: "bar",
+              data: {
+                labels: ohlcData.map((d) => new Date(d.time).toLocaleTimeString()),
+                datasets: [
+                  {
+                    label: "Volume",
+                    data: ohlcData.map((d) => d.volume),
+                    backgroundColor: "rgba(75, 192, 192, 0.5)",
+                  },
+                  {
+                    label: `Volume MA (${volumeMaPeriod})`,
+                    type: "line",
+                    data: ohlcData.map((d) => d.volume_ma),
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    fill: false,
+                    tension: 0.1,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: { display: true, title: { display: true, text: "Time" } },
+                  y: { display: true, title: { display: true, text: "Volume" }, beginAtZero: true },
+                },
+              },
+            });
+          } catch (error) {
+            setChartError("Failed to render Volume chart: " + error.message);
+          }
+        }
+
+        return () => {
+          if (volumeChartRef.current) {
+            volumeChartRef.current.destroy();
+          }
+        };
+      }, [ohlcData, showVolumeMa, volumeMaPeriod]);
+
+      // Filter Signal History
+      const filteredSignalHistory = signalHistory.filter((sig) => {
+        return (
+          (filterSymbol === "" || sig.symbol === filterSymbol) &&
+          (filterTimeframe === "" || sig.timeframe === filterTimeframe) &&
+          (filterSignalType === "" || sig.signal_type === filterSignalType) &&
+          (filterIndicator === "" || sig.indicator === filterIndicator)
+        );
+      });
+
+      return (
+        <div className="min-h-screen bg-gray-900 text-white p-4">
+          <div className="max-w-6xl mx-auto">
+            <h1 className="text-3xl font-bold text-center mb-6">Trading Platform</h1>
+            <div className="flex flex-col sm:flex-row gap-4 mb-6">
+              <select
+                className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+              >
+               
+                <option value="EURUSD_o">EURUSD_o</option>
+                <option value="XAUUSD">XAUUSD</option>
+              </select>
+              <select
+                className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                value={timeframe}
+                onChange={(e) => setTimeframe(e.target.value)}
+              >
+                <option value="M1">M1</option>
+                <option value="M5">M5</option>
+                <option value="M15">M15</option>
+                <option value="H1">H1</option>
+              </select>
+              <button
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-blue-400"
+                onClick={fetchSignal}
+                disabled={loading}
+              >
+                {loading ? "Loading..." : "Refresh Signal"}
+              </button>
+            </div>
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
+              <h2 className="text-xl font-semibold mb-4">Indicator Settings</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block mb-2">Fast SMA Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={smaFastPeriod}
+                    onChange={(e) => setSmaFastPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Slow SMA Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={smaSlowPeriod}
+                    onChange={(e) => setSmaSlowPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Bollinger Bands Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={bbPeriod}
+                    onChange={(e) => setBbPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Bollinger Bands Deviation</label>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="5.0"
+                    step="0.1"
+                    value={bbDeviation}
+                    onChange={(e) => setBbDeviation(Math.min(5.0, Math.max(0.1, parseFloat(e.target.value))))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">RSI Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={rsiPeriod}
+                    onChange={(e) => setRsiPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">MACD Fast Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={macdFastPeriod}
+                    onChange={(e) => setMacdFastPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">MACD Slow Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={macdSlowPeriod}
+                    onChange={(e) => setMacdSlowPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">MACD Signal Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={macdSignalPeriod}
+                    onChange={(e) => setMacdSignalPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Stochastic Fast K Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={stochFastkPeriod}
+                    onChange={(e) => setStochFastkPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Stochastic Slow K Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={stochSlowkPeriod}
+                    onChange={(e) => setStochSlowkPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Stochastic Slow D Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={stochSlowdPeriod}
+                    onChange={(e) => setStochSlowdPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">MFI Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={mfiPeriod}
+                    onChange={(e) => setMfiPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Volume MA Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={volumeMaPeriod}
+                    onChange={(e) => setVolumeMaPeriod(Math.max(1, parseInt(e.target.value)))}
+                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-4 mt-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showSma}
+                    onChange={(e) => setShowSma(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show SMA
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showBollinger}
+                    onChange={(e) => setShowBollinger(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show Bollinger Bands
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showRsi}
+                    onChange={(e) => setShowRsi(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show RSI
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showMacd}
+                    onChange={(e) => setShowMacd(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show MACD
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showStochastic}
+                    onChange={(e) => setShowStochastic(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show Stochastic
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showMfi}
+                    onChange={(e) => setShowMfi(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show MFI
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showPivot}
+                    onChange={(e) => setShowPivot(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show Pivot Points
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={showVolumeMa}
+                    onChange={(e) => setShowVolumeMa(e.target.checked)}
+                    className="mr-2"
+                  />
+                  Show Volume MA
+                </label>
+              </div>
+            </div>
+
+            {signal && (
+              <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
+                <h2 className="text-xl font-semibold mb-4">Latest Trading Signal</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <p><span className="font-bold">Symbol:</span> {signal.symbol}</p>
+                  <p><span className="font-bold">Timeframe:</span> {signal.timeframe}</p>
+                  <p>
+                    <span className="font-bold">Signal Type:</span>{" "}
+                    <span className={signal.signal_type === "Buy" ? "text-green-400" : signal.signal_type === "Sell" ? "text-red-400" : "text-yellow-400"}>
+                      {signal.signal_type}
+                    </span>
+                  </p>
+                  <p><span className="font-bold">Entry Price:</span> {signal.entry_price.toFixed(5)}</p>
+                  <p><span className="font-bold">Confidence:</span> {(signal.confidence * 100).toFixed(2)}%</p>
+                  <p><span className="font-bold">Indicator:</span> {signal.indicator}</p>
+                  <p><span className="font-bold">Timestamp:</span> {signal.timestamp}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
+              <h2 className="text-xl font-semibold mb-4">Price Chart</h2>
+              <div className="relative h-96 mb-4">
+                <canvas ref={priceCanvasRef} className="w-full h-full"></canvas>
+                {chartError && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    {loading ? "Loading chart data..." : chartError}
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-semibold mb-4">RSI Chart</h2>
+              <div className="relative h-48 mb-4">
+                <canvas ref={rsiCanvasRef} className="w-full h-full"></canvas>
+                {chartError && !showRsi && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    RSI chart disabled
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-semibold mb-4">MACD Chart</h2>
+              <div className="relative h-48 mb-4">
+                <canvas ref={macdCanvasRef} className="w-full h-full"></canvas>
+                {chartError && !showMacd && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    MACD chart disabled
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-semibold mb-4">Stochastic Chart</h2>
+              <div className="relative h-48 mb-4">
+                <canvas ref={stochasticCanvasRef} className="w-full h-full"></canvas>
+                {chartError && !showStochastic && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    Stochastic chart disabled
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-semibold mb-4">MFI Chart</h2>
+              <div className="relative h-48 mb-4">
+                <canvas ref={mfiCanvasRef} className="w-full h-full"></canvas>
+                {chartError && !showMfi && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    MFI chart disabled
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-semibold mb-4">Volume Chart</h2>
+              <div className="relative h-48 mb-4">
+                <canvas ref={volumeCanvasRef} className="w-full h-full"></canvas>
+                {chartError && !showVolumeMa && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                    Volume chart disabled
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
+              <h2 className="text-xl font-semibold mb-4">Signal History</h2>
+              <div className="flex flex-col sm:flex-row gap-4 mb-4">
+                <select
+                  className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                  value={filterSymbol}
+                  onChange={(e) => setFilterSymbol(e.target.value)}
+                >
+                  <option value="">All Symbols</option>
+                  
+                  <option value="EURUSD_o">EURUSD_o</option>
+                  <option value="XAUUSD_o">XAUUSD_o</option>
+                </select>
+                <select
+                  className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                  value={filterTimeframe}
+                  onChange={(e) => setFilterTimeframe(e.target.value)}
+                >
+                  <option value="">All Timeframes</option>
+                  <option value="M1">M1</option>
+                  <option value="M5">M5</option>
+                  <option value="M15">M15</option>
+                  <option value="H1">H1</option>
+                </select>
+                <select
+                  className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                  value={filterSignalType}
+                  onChange={(e) => setFilterSignalType(e.target.value)}
+                >
+                  <option value="">All Signal Types</option>
+                  <option value="Buy">Buy</option>
+                  <option value="Sell">Sell</option>
+                  <option value="Hold">Hold</option>
+                </select>
+                <select
+                  className="p-2 bg-gray-800 border border-gray-700 rounded text-white"
+                  value={filterIndicator}
+                  onChange={(e) => setFilterIndicator(e.target.value)}
+                >
+                  <option value="">All Indicators</option>
+                  <option value="SMA">SMA</option>
+                  <option value="MACD">MACD</option>
+                  <option value="Bollinger Bands">Bollinger Bands</option>
+                  <option value="Stochastic">Stochastic</option>
+                  <option value="MFI">MFI</option>
+                  <option value="Combined (S/R + Volume + MFI)">Combined (S/R + Volume + MFI)</option>
+                  <option value="None">None</option>
+                </select>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-gray-700">
+                      <th className="p-2">Symbol</th>
+                      <th className="p-2">Timeframe</th>
+                      <th className="p-2">Signal Type</th>
+                      <th className="p-2">Entry Price</th>
+                      <th className="p-2">Confidence</th>
+                      <th className="p-2">Indicator</th>
+                      <th className="p-2">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSignalHistory.map((sig, index) => (
+                      <tr key={index} className="border-b border-gray-700">
+                        <td className="p-2">{sig.symbol}</td>
+                        <td className="p-2">{sig.timeframe}</td>
+                        <td className={`p-2 ${sig.signal_type === "Buy" ? "text-green-400" : sig.signal_type === "Sell" ? "text-red-400" : "text-yellow-400"}`}>
+                          {sig.signal_type}
+                        </td>
+                        <td className="p-2">{sig.entry_price.toFixed(5)}</td>
+                        <td className="p-2">{(sig.confidence * 100).toFixed(2)}%</td>
+                        <td className="p-2">{sig.indicator}</td>
+                        <td className="p-2">{sig.timestamp}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Render App with ErrorBoundary
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
+  </script>
+</body>
+</html>
